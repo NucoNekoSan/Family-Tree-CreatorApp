@@ -1,11 +1,4 @@
-import {
-  PointerEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -45,21 +38,15 @@ import { useChartTitleSave } from "./useChartTitleSave";
 import { useChartNodeMutations } from "./useChartNodeMutations";
 import { useDebouncedNodeUpdate } from "./useDebouncedNodeUpdate";
 import { useCohabitationDocument } from "./useCohabitationDocument";
-import {
-  createCohabitationFromNodes,
-  findNodeIdsInsidePolygon,
-} from "./cohabitationModel";
+import { createCohabitationFromNodes } from "./cohabitationModel";
 import { CohabitationPanel } from "./CohabitationPanel";
+import { CohabitationLayer } from "./CohabitationLayer";
+import { CohabitationToolOverlay } from "./CohabitationToolOverlay";
 import { NodeForm, QuickAddActions } from "./NodeForm";
 import { FamilyNode } from "./FamilyNode";
 import { ResizeContext } from "./resizeContext";
-import {
-  drawPngFrame,
-  getPngViewport,
-  PNG_FRAME,
-  PNG_HEIGHT,
-  PNG_WIDTH,
-} from "./pngExport";
+import { PNG_FRAME } from "./pngExport";
+import { usePngExport } from "./usePngExport";
 import {
   BASE_NODE_HEIGHT,
   BASE_NODE_WIDTH,
@@ -82,13 +69,10 @@ function ChartEditor() {
     [panel, setPanel] = useState<"add" | "edit">("add"),
     [addPreset, setAddPreset] = useState<AddPreset | null>(null),
     [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved"),
-    [isExporting, setIsExporting] = useState(false),
-    [exportError, setExportError] = useState(""),
     [announcement, setAnnouncement] = useState(""),
     [nodeDraft, setNodeDraft] = useState<NodeDraft | null>(null),
     [lassoMode, setLassoMode] = useState(false),
     [labelMode, setLabelMode] = useState(false),
-    lassoPoints = useRef<{ x: number; y: number }[]>([]),
     {
       cohabitations,
       setCohabitations,
@@ -101,19 +85,6 @@ function ChartEditor() {
       null,
     ),
     [selectedLabel, setSelectedLabel] = useState<string | null>(null),
-    labelDrag = useRef<{
-      id: string;
-      pointerId: number;
-      start: { x: number; y: number };
-      origin: { x: number; y: number };
-    } | null>(null),
-    cohabitationDrag = useRef<{
-      id: string;
-      handle: string;
-      pointerId: number;
-      start: { x: number; y: number };
-      box: { cx: number; cy: number; rx: number; ry: number };
-    } | null>(null),
     titleInput = useRef<HTMLInputElement>(null),
     [connectionPreview, setConnectionPreview] = useState<{
       nodeId: string;
@@ -130,8 +101,6 @@ function ChartEditor() {
     setSelectedCohabitation(null);
     setSelectedLabel(null);
     setAnnouncement("");
-    cohabitationDrag.current = null;
-    labelDrag.current = null;
   }, [id]);
   useEffect(() => {
     if (!chart.data || !isCohabitationHydrated) return;
@@ -195,24 +164,6 @@ function ChartEditor() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [requestDeleteCohabitation, selectedCohabitation, selectedLabel]);
-  useEffect(() => {
-    const releaseCohabitationDrag = () => {
-      cohabitationDrag.current = null;
-      labelDrag.current = null;
-    };
-    window.addEventListener("pointerup", releaseCohabitationDrag, true);
-    window.addEventListener("pointercancel", releaseCohabitationDrag, true);
-    window.addEventListener("blur", releaseCohabitationDrag);
-    return () => {
-      window.removeEventListener("pointerup", releaseCohabitationDrag, true);
-      window.removeEventListener(
-        "pointercancel",
-        releaseCohabitationDrag,
-        true,
-      );
-      window.removeEventListener("blur", releaseCohabitationDrag);
-    };
-  }, []);
   const refresh = (d: ChartDetail) => {
     qc.setQueryData(["chart", id], d);
     const h = hydrateChart(d);
@@ -264,6 +215,11 @@ function ChartEditor() {
       connectionPreview,
       nodeDraft,
     ),
+    { exportPng, exportError, isExporting } = usePngExport(
+      flowRef,
+      display.nodes,
+      chart.data?.title,
+    ),
     resizeActions = useNodeResize(nodes, pngFrame, (nodeId, input) =>
       update.mutate({ chartId: id, nodeId, input }),
     );
@@ -274,56 +230,11 @@ function ChartEditor() {
   const previewNodeDraft = useCallback((draft: NodeDraft | null) => {
     setNodeDraft(draft);
   }, []);
-  const flowPoint = (event: PointerEvent<Element>) =>
-    flow.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-  const finishLasso = useCallback(() => {
-    const nodeIds = findNodeIdsInsidePolygon(lassoPoints.current, nodes);
-    const group = createCohabitationFromNodes(nodes, nodeIds);
-    if (group) {
-      setCohabitations((items) => [...items, group]);
-      setSelectedCohabitation(group.id);
-      setSelectedLabel(null);
-    }
-    lassoPoints.current = [];
-    setLassoMode(false);
-  }, [nodes, setCohabitations]);
-  const exportPng = async () => {
-    if (!flowRef.current) return;
-    setIsExporting(true);
-    setExportError("");
-    const viewport = flowRef.current.querySelector<HTMLElement>(
-      ".react-flow__viewport",
-    );
-    try {
-      if (!viewport) throw new Error("React Flow viewport was not found");
-      const { toCanvas } = await import("html-to-image"),
-        exportViewport = getPngViewport(display.nodes),
-        canvas = await toCanvas(viewport, {
-          width: PNG_WIDTH,
-          height: PNG_HEIGHT,
-          pixelRatio: 1,
-          style: exportViewport.style,
-          filter: (node) =>
-            !(node instanceof Element) ||
-            (!node.closest(".png-frame-preview") &&
-              !node.classList.contains("react-flow__controls") &&
-              !node.classList.contains("react-flow__minimap") &&
-              !node.classList.contains("react-flow__background")),
-        }),
-        context = canvas.getContext("2d"),
-        link = document.createElement("a"),
-        stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
-      if (!context) throw new Error("PNG canvas context was not found");
-      drawPngFrame(context);
-      link.download = `${chart.data?.title || "相関図"}-${stamp}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } catch {
-      setExportError("PNGの保存に失敗しました。再度お試しください。");
-    } finally {
-      setIsExporting(false);
-    }
-  };
+  const screenToFlowPosition = useCallback(
+    (position: { x: number; y: number }) =>
+      flow.current?.screenToFlowPosition(position),
+    [],
+  );
   if (chart.isLoading) return <Spinner />;
   if (chart.isError || !chart.data)
     return (
@@ -379,7 +290,6 @@ function ChartEditor() {
           onClick={() => {
             setLassoMode((active) => !active);
             setLabelMode(false);
-            lassoPoints.current = [];
           }}
           aria-pressed={lassoMode}
         >
@@ -391,7 +301,6 @@ function ChartEditor() {
           onClick={() => {
             setLabelMode((active) => !active);
             setLassoMode(false);
-            lassoPoints.current = [];
           }}
           aria-pressed={labelMode}
         >
@@ -560,50 +469,20 @@ function ChartEditor() {
           </footer>
         </aside>
         <section className="flow-wrap" ref={flowRef}>
-          {(lassoMode || labelMode) && (
-            <svg
-              className="lasso-overlay"
-              onPointerDown={(event) => {
-                const point = flowPoint(event);
-                if (point) {
-                  if (labelMode) {
-                    const next = {
-                      id: crypto.randomUUID(),
-                      x: point.x,
-                      y: point.y,
-                      fontSize: 20,
-                    };
-                    setCohabitationLabels((items) => [...items, next]);
-                    setSelectedLabel(next.id);
-                    setSelectedCohabitation(null);
-                    setLabelMode(false);
-                    return;
-                  }
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  lassoPoints.current = [point];
-                }
-              }}
-              onPointerMove={(event) => {
-                if (!event.currentTarget.hasPointerCapture(event.pointerId))
-                  return;
-                const point = flowPoint(event);
-                if (point) {
-                  const previous = lassoPoints.current.at(-1);
-                  if (
-                    !previous ||
-                    Math.hypot(point.x - previous.x, point.y - previous.y) >= 4
-                  )
-                    lassoPoints.current.push(point);
-                }
-              }}
-              onPointerUp={(event) => {
-                if (event.currentTarget.hasPointerCapture(event.pointerId))
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                finishLasso();
-              }}
-              onPointerCancel={finishLasso}
-            />
-          )}
+          <CohabitationToolOverlay
+            lassoMode={lassoMode}
+            labelMode={labelMode}
+            nodes={nodes}
+            screenToFlowPosition={(event) =>
+              screenToFlowPosition({ x: event.clientX, y: event.clientY })
+            }
+            onSetCohabitations={setCohabitations}
+            onSetLabels={setCohabitationLabels}
+            onSelectCohabitation={setSelectedCohabitation}
+            onSelectLabel={setSelectedLabel}
+            onFinishLasso={() => setLassoMode(false)}
+            onFinishLabel={() => setLabelMode(false)}
+          />
           <ResizeContext.Provider value={resizeActions}>
             <ReactFlow
               nodes={display.nodes}
@@ -696,284 +575,24 @@ function ChartEditor() {
                   </svg>
                 </ViewportPortal>
               )}
-              <ViewportPortal>
-                <svg
-                  className="cohabitation-layer"
-                  aria-hidden="true"
-                  width="100%"
-                  height="100%"
-                  onPointerMove={(event) => {
-                    event.stopPropagation();
-                    const textDrag = labelDrag.current;
-                    if (textDrag) {
-                      if (
-                        textDrag.pointerId !== event.pointerId ||
-                        event.buttons === 0
-                      ) {
-                        labelDrag.current = null;
-                        return;
-                      }
-                      const point = flowPoint(event);
-                      if (!point) return;
-                      setCohabitationLabels((items) =>
-                        items.map((item) =>
-                          item.id === textDrag.id
-                            ? {
-                                ...item,
-                                x:
-                                  textDrag.origin.x +
-                                  point.x -
-                                  textDrag.start.x,
-                                y:
-                                  textDrag.origin.y +
-                                  point.y -
-                                  textDrag.start.y,
-                              }
-                            : item,
-                        ),
-                      );
-                      return;
-                    }
-                    const drag = cohabitationDrag.current;
-                    if (!drag) return;
-                    if (drag.pointerId !== event.pointerId) {
-                      cohabitationDrag.current = null;
-                      return;
-                    }
-                    const point = flowPoint(event);
-                    if (!point) return;
-                    const dx = point.x - drag.start.x,
-                      dy = point.y - drag.start.y;
-                    setCohabitations((items) =>
-                      items.map((item) => {
-                        if (item.id !== drag.id) return item;
-                        const box = drag.box;
-                        if (drag.handle === "label") {
-                          const rawX = (item.labelX ?? box.cx) + dx;
-                          const rawY = (item.labelY ?? box.cy) + dy;
-                          return {
-                            ...item,
-                            labelX: Math.min(
-                              box.cx + box.rx - 12,
-                              Math.max(
-                                box.cx - box.rx + 12,
-                                Number.isFinite(rawX) ? rawX : box.cx,
-                              ),
-                            ),
-                            labelY: Math.min(
-                              box.cy + box.ry - 12,
-                              Math.max(
-                                box.cy - box.ry + 12,
-                                Number.isFinite(rawY) ? rawY : box.cy,
-                              ),
-                            ),
-                          };
-                        }
-                        if (drag.handle === "move")
-                          return { ...item, cx: box.cx + dx, cy: box.cy + dy };
-                        const east = drag.handle.includes("e"),
-                          west = drag.handle.includes("w"),
-                          south = drag.handle.includes("s"),
-                          north = drag.handle.includes("n"),
-                          diagonal = (east || west) && (north || south),
-                          axisScale = diagonal ? Math.SQRT1_2 : 1;
-                        const nextRx = Math.max(
-                          30,
-                          box.rx +
-                            (east ? dx : west ? -dx : 0) / (2 * axisScale),
-                        );
-                        const nextRy = Math.max(
-                          30,
-                          box.ry +
-                            (south ? dy : north ? -dy : 0) / (2 * axisScale),
-                        );
-                        return {
-                          ...item,
-                          cx:
-                            east || west
-                              ? box.cx + (east ? dx : -dx) / 2
-                              : box.cx,
-                          cy:
-                            south || north
-                              ? box.cy + (south ? dy : -dy) / 2
-                              : box.cy,
-                          rx: nextRx,
-                          ry: nextRy,
-                        };
-                      }),
-                    );
-                  }}
-                  onPointerUp={(event) => {
-                    event.stopPropagation();
-                    if (event.currentTarget.hasPointerCapture(event.pointerId))
-                      event.currentTarget.releasePointerCapture(
-                        event.pointerId,
-                      );
-                    cohabitationDrag.current = null;
-                    labelDrag.current = null;
-                  }}
-                  onPointerCancel={() => {
-                    cohabitationDrag.current = null;
-                    labelDrag.current = null;
-                  }}
-                >
-                  {cohabitations.map((group) => {
-                    const members = group.nodeIds.flatMap((nodeId) => {
-                      const node = displayNodeById.get(nodeId);
-                      return node ? [node] : [];
-                    });
-                    if (members.length < 2) return null;
-                    const { cx, cy, rx, ry } = group,
-                      d = `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
-                    return (
-                      <g
-                        key={group.id}
-                        className={`cohabitation-group ${selectedCohabitation === group.id ? "selected" : ""}`}
-                        onPointerDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          setSelectedCohabitation(group.id);
-                          const point = flowPoint(event);
-                          if (point) {
-                            event.currentTarget.ownerSVGElement?.setPointerCapture(
-                              event.pointerId,
-                            );
-                            cohabitationDrag.current = {
-                              id: group.id,
-                              handle: "move",
-                              pointerId: event.pointerId,
-                              start: point,
-                              box: { cx, cy, rx, ry },
-                            };
-                          }
-                        }}
-                      >
-                        <path
-                          className="cohabitation-hit-area"
-                          d={d}
-                          fill="none"
-                          style={{
-                            stroke: "transparent",
-                            strokeWidth: 24,
-                            pointerEvents: "stroke",
-                            cursor: "move",
-                          }}
-                          onPointerDown={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            event.currentTarget.setPointerCapture(
-                              event.pointerId,
-                            );
-                            setSelectedCohabitation(group.id);
-                            const point = flowPoint(event);
-                            if (point)
-                              cohabitationDrag.current = {
-                                id: group.id,
-                                handle: "move",
-                                pointerId: event.pointerId,
-                                start: point,
-                                box: { cx, cy, rx, ry },
-                              };
-                          }}
-                        />
-                        <path
-                          d={d}
-                          fill="none"
-                          stroke="#52645e"
-                          strokeWidth={
-                            selectedCohabitation === group.id ? 4 : 3
-                          }
-                          strokeDasharray="12 8"
-                          strokeLinecap="butt"
-                          style={{ pointerEvents: "none" }}
-                        />
-                        {selectedCohabitation === group.id &&
-                          (
-                            [
-                              "e",
-                              "w",
-                              "n",
-                              "s",
-                              "ne",
-                              "nw",
-                              "se",
-                              "sw",
-                            ] as const
-                          ).map((handle) => {
-                            const diagonal = handle.length === 2,
-                              axisScale = diagonal ? Math.SQRT1_2 : 1,
-                              handleX = handle.includes("e")
-                                ? cx + rx * axisScale
-                                : handle.includes("w")
-                                  ? cx - rx * axisScale
-                                  : cx,
-                              handleY = handle.includes("s")
-                                ? cy + ry * axisScale
-                                : handle.includes("n")
-                                  ? cy - ry * axisScale
-                                  : cy;
-                            return (
-                              <circle
-                                key={handle}
-                                className="cohabitation-handle"
-                                cx={handleX}
-                                cy={handleY}
-                                r="9"
-                                onPointerDown={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  event.currentTarget.setPointerCapture(
-                                    event.pointerId,
-                                  );
-                                  setSelectedCohabitation(group.id);
-                                  const point = flowPoint(event);
-                                  if (point)
-                                    cohabitationDrag.current = {
-                                      id: group.id,
-                                      handle,
-                                      pointerId: event.pointerId,
-                                      start: point,
-                                      box: { cx, cy, rx, ry },
-                                    };
-                                }}
-                              />
-                            );
-                          })}
-                      </g>
-                    );
-                  })}
-                  {cohabitationLabels.map((label) => (
-                    <text
-                      key={label.id}
-                      className={`cohabitation-label ${selectedLabel === label.id ? "selected" : ""}`}
-                      x={label.x}
-                      y={label.y}
-                      fontSize={label.fontSize}
-                      fill="#263b34"
-                      onPointerDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setSelectedLabel(label.id);
-                        setSelectedCohabitation(null);
-                        const point = flowPoint(event);
-                        if (point) {
-                          event.currentTarget.ownerSVGElement?.setPointerCapture(
-                            event.pointerId,
-                          );
-                          labelDrag.current = {
-                            id: label.id,
-                            pointerId: event.pointerId,
-                            start: point,
-                            origin: { x: label.x, y: label.y },
-                          };
-                        }
-                      }}
-                    >
-                      同居
-                    </text>
-                  ))}
-                </svg>
-              </ViewportPortal>
+              <CohabitationLayer
+                groups={cohabitations}
+                labels={cohabitationLabels}
+                nodesById={displayNodeById}
+                selectedGroupId={selectedCohabitation}
+                selectedLabelId={selectedLabel}
+                screenToFlowPosition={screenToFlowPosition}
+                onSetGroups={setCohabitations}
+                onSetLabels={setCohabitationLabels}
+                onSelectGroup={(groupId) => {
+                  setSelectedCohabitation(groupId);
+                  if (groupId) setSelectedLabel(null);
+                }}
+                onSelectLabel={(labelId) => {
+                  setSelectedLabel(labelId);
+                  if (labelId) setSelectedCohabitation(null);
+                }}
+              />
               <MiniMap
                 nodeColor={(n) =>
                   (n.data as Partial<FamilyNodeData>).fillColor || "#52645e"
