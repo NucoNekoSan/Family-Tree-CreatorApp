@@ -1,4 +1,4 @@
-import { getNodesBounds, getViewportForBounds, type Node } from "@xyflow/react";
+import { type Node } from "@xyflow/react";
 import type { FamilyNodeData } from "../../familyGraph";
 
 export const PNG_WIDTH = 2400;
@@ -22,23 +22,6 @@ export interface PngFramePreview {
   radius: number;
 }
 
-const nodeCenter = (node: Node<FamilyNodeData>) => ({
-  x:
-    node.position.x +
-    (node.width ||
-      node.measured?.width ||
-      node.initialWidth ||
-      180 * node.data.scale) /
-      2,
-  y:
-    node.position.y +
-    (node.height ||
-      node.measured?.height ||
-      node.initialHeight ||
-      120 * node.data.scale) /
-      2,
-});
-
 export function getPngViewport(nodes: Node<FamilyNodeData>[]) {
   if (!nodes.length) {
     return {
@@ -53,25 +36,14 @@ export function getPngViewport(nodes: Node<FamilyNodeData>[]) {
     };
   }
 
-  const self = nodes.find((node) => node.data.relationKind === "self"),
-    selfCenter = self ? nodeCenter(self) : null,
-    viewport = selfCenter
-      ? {
-          x: PNG_WIDTH / 2 - selfCenter.x * PNG_EXPORT_SCALE,
-          y: PNG_HEIGHT / 2 - selfCenter.y * PNG_EXPORT_SCALE,
-          zoom: PNG_EXPORT_SCALE,
-        }
-      : getViewportForBounds(
-          getNodesBounds(nodes),
-          PNG_WIDTH,
-          PNG_HEIGHT,
-          0.1,
-          2,
-          0.12,
-        ),
+  const viewport = {
+      x: PNG_WIDTH / 2,
+      y: PNG_HEIGHT / 2,
+      zoom: PNG_EXPORT_SCALE,
+    },
     zoom = viewport.zoom,
-    x = selfCenter ? PNG_WIDTH / 2 - selfCenter.x * zoom : viewport.x,
-    y = selfCenter ? PNG_HEIGHT / 2 - selfCenter.y * zoom : viewport.y;
+    x = viewport.x,
+    y = viewport.y;
 
   return {
     x,
@@ -88,7 +60,7 @@ export function getPngViewport(nodes: Node<FamilyNodeData>[]) {
 export function getPngFramePreview(
   nodes: Node<FamilyNodeData>[],
 ): PngFramePreview | null {
-  if (!nodes.some((node) => node.data.relationKind === "self")) return null;
+  if (!nodes.length) return null;
 
   const { x, y, zoom } = getPngViewport(nodes),
     { dash, inset, lineWidth, radius } = PNG_FRAME;

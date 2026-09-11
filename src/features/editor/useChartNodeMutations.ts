@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { useRef } from "react";
 import { api } from "../../api";
 import type { ChartDetail, ChartNodeRecord } from "../../types";
 import type { FamilyNodeData } from "../../familyGraph";
@@ -13,9 +14,26 @@ export function useChartNodeMutations(
   setSaveState: SaveState,
   onDeleted: () => void,
 ) {
+  const savingStartedAt = useRef(0);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markSaved = () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    const remaining = Math.max(0, 500 - (Date.now() - savingStartedAt.current));
+    savedTimer.current = setTimeout(() => {
+      savedTimer.current = null;
+      setSaveState("saved");
+    }, remaining);
+  };
   const mutationOptions = {
-    onMutate: () => setSaveState("saving"),
-    onSuccess: refresh,
+    onMutate: () => {
+      savingStartedAt.current = Date.now();
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      setSaveState("saving");
+    },
+    onSuccess: (detail: ChartDetail) => {
+      refresh(detail);
+      markSaved();
+    },
     onError: () => setSaveState("error"),
   };
   const create = useMutation({
@@ -44,6 +62,7 @@ export function useChartNodeMutations(
     onSuccess: (detail) => {
       onDeleted();
       refresh(detail);
+      markSaved();
     },
   });
   return { create, update, layout, remove };

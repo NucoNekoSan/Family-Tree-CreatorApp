@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Node } from "@xyflow/react";
 import type { ChartDetail, ChartNodeRecord } from "../../types";
@@ -180,11 +186,11 @@ describe("relationship quick add form", () => {
     expect(screen.getByText(/配偶者が複数います/)).toBeTruthy();
   });
 
-  it("offers an explicit fix for an existing single-parent child", () => {
+  it("offers an explicit fix for an existing single-parent child", async () => {
     const child = node("child", "子", "person", "child", {
         parentNodeId1: "person",
       }),
-      onSubmit = vi.fn();
+      onChange = vi.fn();
     render(
       <NodeForm
         mode="edit"
@@ -195,20 +201,21 @@ describe("relationship quick add form", () => {
           child,
         ]}
         value={child}
-        onSubmit={onSubmit}
+        onSubmit={vi.fn()}
+        onChange={onChange}
       />,
     );
 
     fireEvent.click(
       screen.getByRole("button", { name: /配偶者「配偶者」を母に設定/ }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "変更を保存" }));
-
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentNodeId1: "person",
-        parentNodeId2: "partner",
-      }),
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parentNodeId1: "person",
+          parentNodeId2: "partner",
+        }),
+      ),
     );
   });
 
@@ -339,5 +346,64 @@ describe("relationship quick add form", () => {
     expect(onDraftChange).toHaveBeenCalledWith(
       expect.objectContaining({ nodeId: "child", memo: "編集中のメモ" }),
     );
+  });
+
+  it("keeps memo text when the same selected node is re-rendered", () => {
+    const current = node("child", "子", "person", "child", {
+        memo: "元のメモ",
+      }),
+      { rerender } = render(
+        <NodeForm
+          mode="edit"
+          detail={detail([record("child", "person", null)])}
+          nodes={[node("person", "本人", null, "self"), current]}
+          value={current}
+          onSubmit={vi.fn()}
+        />,
+      );
+    const memo = screen.getByRole("textbox", { name: /メモ/ });
+    fireEvent.change(memo, { target: { value: "入力中のメモ" } });
+    rerender(
+      <NodeForm
+        mode="edit"
+        detail={detail([record("child", "person", null)])}
+        nodes={[node("person", "本人", null, "self"), { ...current }]}
+        value={{ ...current, data: { ...current.data } }}
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(
+      (screen.getByRole("textbox", { name: /メモ/ }) as HTMLTextAreaElement)
+        .value,
+    ).toBe("入力中のメモ");
+  });
+
+  it("does not autosave again when the same node is refreshed after saving", async () => {
+    const current = node("child", "子", "person", "child"),
+      onChange = vi.fn(),
+      { rerender } = render(
+        <NodeForm
+          mode="edit"
+          detail={detail([record("child", "person", null)])}
+          nodes={[node("person", "本人", null, "self"), current]}
+          value={current}
+          onSubmit={vi.fn()}
+          onChange={onChange}
+        />,
+      );
+
+    await waitFor(() => expect(onChange).not.toHaveBeenCalled());
+    rerender(
+      <NodeForm
+        mode="edit"
+        detail={detail([record("child", "person", null)])}
+        nodes={[node("person", "本人", null, "self"), { ...current }]}
+        value={{ ...current, data: { ...current.data } }}
+        onSubmit={vi.fn()}
+        onChange={onChange}
+      />,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

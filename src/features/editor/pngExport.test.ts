@@ -34,7 +34,7 @@ const data: FamilyNodeData = {
 };
 
 describe("PNG export viewport", () => {
-  it("uses a fixed 2x viewport centered on the self node", () => {
+  it("uses a fixed 2x viewport centered on the world origin", () => {
     const nodes: Node<FamilyNodeData>[] = [
         {
           id: "self",
@@ -49,23 +49,18 @@ describe("PNG export viewport", () => {
           data,
         },
       ],
-      viewport = getPngViewport(nodes),
-      selfCenter = {
-        x: viewport.x + 90 * viewport.zoom,
-        y: viewport.y + 60 * viewport.zoom,
-      };
-
+      viewport = getPngViewport(nodes);
     expect(PNG_WIDTH / PNG_HEIGHT).toBe(2);
     expect(viewport.style).toMatchObject({
       width: "2400px",
       height: "1200px",
     });
-    expect(selfCenter.x).toBeCloseTo(PNG_WIDTH / 2);
-    expect(selfCenter.y).toBeCloseTo(PNG_HEIGHT / 2);
+    expect(viewport.x).toBeCloseTo(PNG_WIDTH / 2);
+    expect(viewport.y).toBeCloseTo(PNG_HEIGHT / 2);
     expect(viewport.zoom).toBe(2);
   });
 
-  it("centers the complete graph when no self node exists", () => {
+  it("keeps the origin fixed when no self node exists", () => {
     const otherData = { ...data, relationKind: "other" as const },
       nodes: Node<FamilyNodeData>[] = [
         {
@@ -81,17 +76,13 @@ describe("PNG export viewport", () => {
           data: otherData,
         },
       ],
-      viewport = getPngViewport(nodes),
-      graphCenter = {
-        x: viewport.x + 390 * viewport.zoom,
-        y: viewport.y + 360 * viewport.zoom,
-      };
+      viewport = getPngViewport(nodes);
 
-    expect(graphCenter.x).toBeCloseTo(PNG_WIDTH / 2);
-    expect(graphCenter.y).toBeCloseTo(PNG_HEIGHT / 2);
+    expect(viewport.x).toBeCloseTo(PNG_WIDTH / 2);
+    expect(viewport.y).toBeCloseTo(PNG_HEIGHT / 2);
   });
 
-  it("maps the exported frame back to flow coordinates around the self node", () => {
+  it("maps the exported frame back to fixed origin flow coordinates", () => {
     const self: Node<FamilyNodeData> = {
         id: "self",
         position: { x: 100, y: 200 },
@@ -107,8 +98,8 @@ describe("PNG export viewport", () => {
       preview = getPngFramePreview([self, other]);
 
     expect(preview).not.toBeNull();
-    expect(preview!.x + preview!.width / 2).toBeCloseTo(190);
-    expect(preview!.y + preview!.height / 2).toBeCloseTo(260);
+    expect(preview!.x + preview!.width / 2).toBeCloseTo(0);
+    expect(preview!.y + preview!.height / 2).toBeCloseTo(0);
 
     const viewport = getPngViewport([self, other]);
     expect(preview!.x * viewport.zoom + viewport.x).toBeCloseTo(
@@ -122,7 +113,7 @@ describe("PNG export viewport", () => {
     );
   });
 
-  it("does not preview a self-centered frame without a self node", () => {
+  it("previews a fixed frame without a self node", () => {
     const node: Node<FamilyNodeData> = {
       id: "other",
       position: { x: 100, y: 200 },
@@ -130,7 +121,7 @@ describe("PNG export viewport", () => {
       data: { ...data, relationKind: "other" },
     };
 
-    expect(getPngFramePreview([node])).toBeNull();
+    expect(getPngFramePreview([node])).not.toBeNull();
     expect(getPngFramePreview([])).toBeNull();
   });
 

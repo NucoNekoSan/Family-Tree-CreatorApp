@@ -131,6 +131,12 @@ p {
   justify-content: center;
   gap: 7px;
 }
+.button.active[aria-pressed="true"] {
+  background: var(--forest);
+  color: #fff;
+  border-color: var(--forest);
+  box-shadow: 0 0 0 3px rgba(28, 67, 55, 0.18);
+}
 .button:hover {
   border-color: #aeb9b3;
 }
@@ -858,6 +864,67 @@ p {
 .flow-wrap {
   position: relative;
   background: #f4f2eb;
+}
+.lasso-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+.cohabitation-group path {
+  fill: none;
+  stroke: #52645e;
+  stroke-width: 3;
+  stroke-dasharray: 12 8;
+}
+.cohabitation-group.selected path {
+  stroke-width: 4;
+}
+.cohabitation-layer {
+  position: absolute;
+  overflow: visible;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+.cohabitation-group text {
+  fill: #263b34;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-family: inherit;
+  font-weight: 700;
+  pointer-events: auto;
+  cursor: move;
+}
+.cohabitation-label {
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-family: "Shippori Mincho", serif;
+  font-weight: 700;
+  cursor: move;
+  pointer-events: auto;
+}
+.cohabitation-label.selected {
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 4px;
+}
+.cohabitation-label-editor {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+}
+.cohabitation-label-editor h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+.cohabitation-handle {
+  fill: #fff;
+  stroke: #b28732;
+  stroke-width: 2;
+  cursor: nwse-resize;
 }
 .png-frame-preview {
   position: absolute;

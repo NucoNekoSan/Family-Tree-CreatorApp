@@ -1,4 +1,11 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  FormEvent,
+  PointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,8 +23,8 @@ import {
 import {
   ArrowLeft,
   Baby,
-  Check,
   Download,
+  Lasso,
   Plus,
   Save,
   Settings as SettingsIcon,
@@ -47,12 +54,12 @@ import { FamilyTreeEdge } from "./FamilyTreeEdge";
 import { useNodeResize } from "./useNodeResize";
 import { useChartTitleSave } from "./useChartTitleSave";
 import { useChartNodeMutations } from "./useChartNodeMutations";
+import { useDebouncedNodeUpdate } from "./useDebouncedNodeUpdate";
 import { NodeTextFields } from "./NodeTextFields";
 import { FamilyNode } from "./FamilyNode";
 import { ResizeContext } from "./resizeContext";
 import {
   drawPngFrame,
-  getPngFramePreview,
   getPngViewport,
   PNG_FRAME,
   PNG_HEIGHT,
@@ -63,7 +70,6 @@ import {
   BASE_NODE_WIDTH,
   clampNodeToFrame,
   nodeSize,
-  normalizeNodesToFrame,
 } from "./nodeLayout";
 
 const nodeTypes = { family: FamilyNode },
@@ -84,14 +90,47 @@ function ChartEditor() {
     [isExporting, setIsExporting] = useState(false),
     [exportError, setExportError] = useState(""),
     [nodeDraft, setNodeDraft] = useState<NodeDraft | null>(null),
+    [lassoMode, setLassoMode] = useState(false),
+    [labelMode, setLabelMode] = useState(false),
+    [lassoPoints, setLassoPoints] = useState<{ x: number; y: number }[]>([]),
+    [cohabitations, setCohabitations] = useState<
+      {
+        id: string;
+        nodeIds: string[];
+        label: string;
+        fontSize: number;
+        cx: number;
+        cy: number;
+        rx: number;
+        ry: number;
+        labelX?: number;
+        labelY?: number;
+      }[]
+    >([]),
+    [selectedCohabitation, setSelectedCohabitation] = useState<string | null>(
+      null,
+    ),
+    [cohabitationLabels, setCohabitationLabels] = useState<
+      { id: string; x: number; y: number; fontSize: number }[]
+    >([]),
+    [selectedLabel, setSelectedLabel] = useState<string | null>(null),
+    labelDrag = useRef<{
+      id: string;
+      pointerId: number;
+      start: { x: number; y: number };
+      origin: { x: number; y: number };
+    } | null>(null),
+    cohabitationDrag = useRef<{
+      id: string;
+      handle: string;
+      pointerId: number;
+      start: { x: number; y: number };
+      box: { cx: number; cy: number; rx: number; ry: number };
+    } | null>(null),
+    titleInput = useRef<HTMLInputElement>(null),
     [connectionPreview, setConnectionPreview] = useState<{
       nodeId: string;
       direction: Direction | null;
-    } | null>(null),
-    normalizedChart = useRef(""),
-    dragStart = useRef<{
-      self: { x: number; y: number };
-      nodes: Node<FamilyNodeData>[];
     } | null>(null);
   useEffect(() => {
     if (chart.data) {
@@ -100,6 +139,78 @@ function ChartEditor() {
       setEdges(h.edges);
     }
   }, [chart.data, setNodes, setEdges]);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`kakeizu:cohabitations:${id}`);
+      if (saved) setCohabitations(JSON.parse(saved));
+      const savedLabels = localStorage.getItem(
+        `kakeizu:cohabitation-labels:${id}`,
+      );
+      if (savedLabels) setCohabitationLabels(JSON.parse(savedLabels));
+    } catch {
+      /* ignore malformed local drafts */
+    }
+  }, [id]);
+  useEffect(() => {
+    if (cohabitations.length)
+      localStorage.setItem(
+        `kakeizu:cohabitations:${id}`,
+        JSON.stringify(cohabitations),
+      );
+  }, [cohabitations, id]);
+  useEffect(() => {
+    localStorage.setItem(
+      `kakeizu:cohabitation-labels:${id}`,
+      JSON.stringify(cohabitationLabels),
+    );
+  }, [cohabitationLabels, id]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (!selectedCohabitation && !selectedLabel) ||
+        !["Delete", "Backspace"].includes(event.key)
+      )
+        return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable
+      )
+        return;
+      event.preventDefault();
+      if (selectedCohabitation)
+        setCohabitations((items) =>
+          items.filter((item) => item.id !== selectedCohabitation),
+        );
+      if (selectedLabel)
+        setCohabitationLabels((items) =>
+          items.filter((item) => item.id !== selectedLabel),
+        );
+      setSelectedCohabitation(null);
+      setSelectedLabel(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedCohabitation, selectedLabel]);
+  useEffect(() => {
+    const releaseCohabitationDrag = () => {
+      cohabitationDrag.current = null;
+      labelDrag.current = null;
+    };
+    window.addEventListener("pointerup", releaseCohabitationDrag, true);
+    window.addEventListener("pointercancel", releaseCohabitationDrag, true);
+    window.addEventListener("blur", releaseCohabitationDrag);
+    return () => {
+      window.removeEventListener("pointerup", releaseCohabitationDrag, true);
+      window.removeEventListener(
+        "pointercancel",
+        releaseCohabitationDrag,
+        true,
+      );
+      window.removeEventListener("blur", releaseCohabitationDrag);
+    };
+  }, []);
   const refresh = (d: ChartDetail) => {
     qc.setQueryData(["chart", id], d);
     const h = hydrateChart(d);
@@ -107,9 +218,8 @@ function ChartEditor() {
     setEdges(h.edges);
     setConnectionPreview(null);
     setNodeDraft(null);
-    setSaveState("saved");
   };
-  const { create, update, layout, remove } = useChartNodeMutations(
+  const { create, update, remove } = useChartNodeMutations(
     id,
     refresh,
     setSaveState,
@@ -119,6 +229,36 @@ function ChartEditor() {
     },
   );
   const titleSave = useChartTitleSave(id);
+  const updateSelectedNode = useCallback(
+    (input: Partial<Omit<ChartNodeRecord, "id">>) => {
+      if (selected) update.mutate({ nodeId: selected, input });
+    },
+    [selected, update],
+  );
+  const {
+    schedule: scheduleDebouncedNodeUpdate,
+    flush: flushDebouncedNodeUpdate,
+  } = useDebouncedNodeUpdate(updateSelectedNode);
+  const scheduleNodeUpdate = useCallback(
+    (input: Partial<Omit<ChartNodeRecord, "id">>) =>
+      scheduleDebouncedNodeUpdate(input),
+    [scheduleDebouncedNodeUpdate],
+  );
+  const saveChanges = useCallback(() => {
+    flushDebouncedNodeUpdate();
+    const title = titleInput.current?.value.trim();
+    if (title && title !== chart.data?.title) titleSave.mutate(title);
+  }, [chart.data?.title, flushDebouncedNodeUpdate, titleSave]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "s" || (!event.ctrlKey && !event.metaKey))
+        return;
+      event.preventDefault();
+      saveChanges();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [saveChanges]);
   const { display, pngFrame } = useEditorPreview(
       nodes,
       edges,
@@ -128,20 +268,74 @@ function ChartEditor() {
     resizeActions = useNodeResize(nodes, pngFrame, (nodeId, input) =>
       update.mutate({ nodeId, input }),
     );
-  useEffect(() => {
-    if (!chart.data || normalizedChart.current === id || !nodes.length) return;
-    if (nodes.some((node) => !node.measured?.height)) return;
-    normalizedChart.current = id;
-    const frame = getPngFramePreview(nodes),
-      normalized = normalizeNodesToFrame(nodes, frame);
-    if (normalized !== nodes) {
-      setNodes(normalized);
-      layout.mutate(normalized);
-    }
-  }, [chart.data, id, layout, nodes, setNodes]);
   const previewNodeDraft = useCallback((draft: NodeDraft | null) => {
     setNodeDraft(draft);
   }, []);
+  const flowPoint = (event: PointerEvent<Element>) =>
+    flow.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+  const finishLasso = useCallback(() => {
+    if (lassoPoints.length >= 3) {
+      const inside = (x: number, y: number) => {
+        let hit = false;
+        for (
+          let i = 0, j = lassoPoints.length - 1;
+          i < lassoPoints.length;
+          j = i++
+        ) {
+          const a = lassoPoints[i],
+            b = lassoPoints[j];
+          if (
+            a.y > y !== b.y > y &&
+            x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x
+          )
+            hit = !hit;
+        }
+        return hit;
+      };
+      const nodeIds = nodes
+        .filter((node) => {
+          const size = nodeSize(node);
+          return inside(
+            node.position.x + size.width / 2,
+            node.position.y + size.height / 2,
+          );
+        })
+        .map((node) => node.id);
+      if (nodeIds.length < 2) {
+        setLassoPoints([]);
+        setLassoMode(false);
+        return;
+      }
+      const selectedNodes = nodes.filter((node) => nodeIds.includes(node.id));
+      const bounds = selectedNodes.reduce(
+        (box, node) => {
+          const size = nodeSize(node);
+          return {
+            left: Math.min(box.left, node.position.x),
+            top: Math.min(box.top, node.position.y),
+            right: Math.max(box.right, node.position.x + size.width),
+            bottom: Math.max(box.bottom, node.position.y + size.height),
+          };
+        },
+        { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity },
+      );
+      setCohabitations((items) => [
+        ...items,
+        {
+          id: crypto.randomUUID(),
+          nodeIds,
+          label: "同居",
+          fontSize: 20,
+          cx: (bounds.left + bounds.right) / 2,
+          cy: (bounds.top + bounds.bottom) / 2,
+          rx: (bounds.right - bounds.left) / 2 + 36,
+          ry: (bounds.bottom - bounds.top) / 2 + 36,
+        },
+      ]);
+    }
+    setLassoPoints([]);
+    setLassoMode(false);
+  }, [lassoPoints, nodes]);
   const exportPng = async () => {
     if (!flowRef.current) return;
     setIsExporting(true);
@@ -202,6 +396,7 @@ function ChartEditor() {
         <Logo />
         <span className="top-divider" />
         <input
+          ref={titleInput}
           className="title-input"
           aria-label="相関図タイトル"
           defaultValue={chart.data.title}
@@ -211,7 +406,12 @@ function ChartEditor() {
             titleSave.mutate(e.target.value.trim())
           }
         />
-        <div className={`save-state ${saveState}`}>
+        <div
+          className={`save-state ${saveState}`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <Save size={14} />
           {saveState === "saving"
             ? "保存中"
@@ -223,6 +423,42 @@ function ChartEditor() {
           <SettingsIcon size={17} />
           表示設定
         </button>
+        <button
+          className={`button ${lassoMode ? "active" : ""}`}
+          onClick={() => {
+            setLassoMode((active) => !active);
+            setLabelMode(false);
+            setLassoPoints([]);
+          }}
+          aria-pressed={lassoMode}
+        >
+          <Lasso size={17} />
+          同居輪
+        </button>
+        <button
+          className={`button ${labelMode ? "active" : ""}`}
+          onClick={() => {
+            setLabelMode((active) => !active);
+            setLassoMode(false);
+            setLassoPoints([]);
+          }}
+          aria-pressed={labelMode}
+        >
+          同居文字
+        </button>
+        {selectedCohabitation && (
+          <button
+            className="button danger"
+            onClick={() => {
+              setCohabitations((items) =>
+                items.filter((item) => item.id !== selectedCohabitation),
+              );
+              setSelectedCohabitation(null);
+            }}
+          >
+            同居輪を削除
+          </button>
+        )}
         <button
           className="button primary"
           onClick={exportPng}
@@ -296,6 +532,7 @@ function ChartEditor() {
                     setConnectionPreview({ nodeId: selectedNode.id, direction })
                   }
                   onDraftChange={previewNodeDraft}
+                  onChange={scheduleNodeUpdate}
                   onSubmit={(v) =>
                     update.mutate({ nodeId: selectedNode.id, input: v })
                   }
@@ -313,6 +550,63 @@ function ChartEditor() {
             </Notice>
           )}
           {exportError && <Notice tone="error">{exportError}</Notice>}
+          {selectedLabel &&
+            (() => {
+              const label = cohabitationLabels.find(
+                (item) => item.id === selectedLabel,
+              );
+              if (!label) return null;
+              return (
+                <section className="cohabitation-label-editor node-form">
+                  <h2>同居文字を編集</h2>
+                  <label htmlFor="cohabitation-label-font-size">
+                    同居文字のフォントサイズ{" "}
+                    <output htmlFor="cohabitation-label-font-size">
+                      {label.fontSize}px
+                    </output>
+                    <input
+                      id="cohabitation-label-font-size"
+                      name="cohabitationLabelFontSize"
+                      type="range"
+                      className="nowheel nodrag nopan"
+                      min={8}
+                      max={48}
+                      step={1}
+                      value={label.fontSize}
+                      onKeyDown={(event) => {
+                        if (
+                          ["Enter", "Backspace", "Delete"].includes(event.key)
+                        )
+                          event.stopPropagation();
+                      }}
+                      onChange={(event) =>
+                        setCohabitationLabels((items) =>
+                          items.map((item) =>
+                            item.id === label.id
+                              ? {
+                                  ...item,
+                                  fontSize: Number(event.target.value),
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <button
+                    className="button danger wide"
+                    onClick={() => {
+                      setCohabitationLabels((items) =>
+                        items.filter((item) => item.id !== label.id),
+                      );
+                      setSelectedLabel(null);
+                    }}
+                  >
+                    同居文字を削除
+                  </button>
+                </section>
+              );
+            })()}
           <footer>
             <p>
               <b>{nodes.length}</b> ノード
@@ -321,6 +615,43 @@ function ChartEditor() {
           </footer>
         </aside>
         <section className="flow-wrap" ref={flowRef}>
+          {(lassoMode || labelMode) && (
+            <svg
+              className="lasso-overlay"
+              onPointerDown={(event) => {
+                const point = flowPoint(event);
+                if (point) {
+                  if (labelMode) {
+                    const next = {
+                      id: crypto.randomUUID(),
+                      x: point.x,
+                      y: point.y,
+                      fontSize: 20,
+                    };
+                    setCohabitationLabels((items) => [...items, next]);
+                    setSelectedLabel(next.id);
+                    setSelectedCohabitation(null);
+                    setLabelMode(false);
+                    return;
+                  }
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  setLassoPoints([point]);
+                }
+              }}
+              onPointerMove={(event) => {
+                if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                  return;
+                const point = flowPoint(event);
+                if (point) setLassoPoints((points) => [...points, point]);
+              }}
+              onPointerUp={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                finishLasso();
+              }}
+              onPointerCancel={finishLasso}
+            />
+          )}
           <ResizeContext.Provider value={resizeActions}>
             <ReactFlow
               nodes={display.nodes}
@@ -356,30 +687,8 @@ function ChartEditor() {
                 setNodeDraft(null);
                 setSelected(null);
               }}
-              onNodeDragStart={(_, n) => {
-                if (n.data.relationKind === "self")
-                  dragStart.current = {
-                    self: { ...n.position },
-                    nodes: nodes.map((node) => ({
-                      ...node,
-                      position: { ...node.position },
-                    })),
-                  };
-              }}
               onNodeDrag={(_, n) => {
-                if (n.data.relationKind === "self" && dragStart.current) {
-                  const dx = n.position.x - dragStart.current.self.x,
-                    dy = n.position.y - dragStart.current.self.y;
-                  setNodes(
-                    dragStart.current.nodes.map((node) => ({
-                      ...node,
-                      position: {
-                        x: node.position.x + dx,
-                        y: node.position.y + dy,
-                      },
-                    })),
-                  );
-                } else if (n.type === "family") {
+                if (n.type === "family") {
                   const position = clampNodeToFrame(
                     n.position,
                     nodeSize(n),
@@ -398,30 +707,12 @@ function ChartEditor() {
               }}
               onNodeDragStop={(_, n) => {
                 if (n.type !== "family") return;
-                if (n.data.relationKind === "self") {
-                  const start = dragStart.current,
-                    dx = start ? n.position.x - start.self.x : 0,
-                    dy = start ? n.position.y - start.self.y : 0,
-                    moved = start
-                      ? start.nodes.map((node) => ({
-                          ...node,
-                          position: {
-                            x: node.position.x + dx,
-                            y: node.position.y + dy,
-                          },
-                        }))
-                      : nodes;
-                  dragStart.current = null;
-                  setNodes(moved);
-                  layout.mutate(moved);
-                } else {
-                  const position = clampNodeToFrame(
-                    n.position,
-                    nodeSize(n),
-                    pngFrame,
-                  );
-                  update.mutate({ nodeId: n.id, input: position });
-                }
+                const position = clampNodeToFrame(
+                  n.position,
+                  nodeSize(n),
+                  pngFrame,
+                );
+                update.mutate({ nodeId: n.id, input: position });
               }}
               minZoom={0.3}
               maxZoom={2}
@@ -453,6 +744,283 @@ function ChartEditor() {
                   </svg>
                 </ViewportPortal>
               )}
+              <ViewportPortal>
+                <svg
+                  className="cohabitation-layer"
+                  aria-hidden="true"
+                  width="100%"
+                  height="100%"
+                  onPointerMove={(event) => {
+                    event.stopPropagation();
+                    const textDrag = labelDrag.current;
+                    if (textDrag) {
+                      if (
+                        textDrag.pointerId !== event.pointerId ||
+                        event.buttons === 0
+                      ) {
+                        labelDrag.current = null;
+                        return;
+                      }
+                      const point = flowPoint(event);
+                      if (!point) return;
+                      setCohabitationLabels((items) =>
+                        items.map((item) =>
+                          item.id === textDrag.id
+                            ? {
+                                ...item,
+                                x:
+                                  textDrag.origin.x +
+                                  point.x -
+                                  textDrag.start.x,
+                                y:
+                                  textDrag.origin.y +
+                                  point.y -
+                                  textDrag.start.y,
+                              }
+                            : item,
+                        ),
+                      );
+                      return;
+                    }
+                    const drag = cohabitationDrag.current;
+                    if (!drag) return;
+                    if (drag.pointerId !== event.pointerId) {
+                      cohabitationDrag.current = null;
+                      return;
+                    }
+                    const point = flowPoint(event);
+                    if (!point) return;
+                    const dx = point.x - drag.start.x,
+                      dy = point.y - drag.start.y;
+                    setCohabitations((items) =>
+                      items.map((item) => {
+                        if (item.id !== drag.id) return item;
+                        const box = drag.box;
+                        if (drag.handle === "label") {
+                          const rawX = (item.labelX ?? box.cx) + dx;
+                          const rawY = (item.labelY ?? box.cy) + dy;
+                          return {
+                            ...item,
+                            labelX: Math.min(
+                              box.cx + box.rx - 12,
+                              Math.max(
+                                box.cx - box.rx + 12,
+                                Number.isFinite(rawX) ? rawX : box.cx,
+                              ),
+                            ),
+                            labelY: Math.min(
+                              box.cy + box.ry - 12,
+                              Math.max(
+                                box.cy - box.ry + 12,
+                                Number.isFinite(rawY) ? rawY : box.cy,
+                              ),
+                            ),
+                          };
+                        }
+                        if (drag.handle === "move")
+                          return { ...item, cx: box.cx + dx, cy: box.cy + dy };
+                        const east = drag.handle.includes("e"),
+                          west = drag.handle.includes("w"),
+                          south = drag.handle.includes("s"),
+                          north = drag.handle.includes("n"),
+                          diagonal = (east || west) && (north || south),
+                          axisScale = diagonal ? Math.SQRT1_2 : 1;
+                        const nextRx = Math.max(
+                          30,
+                          box.rx +
+                            (east ? dx : west ? -dx : 0) / (2 * axisScale),
+                        );
+                        const nextRy = Math.max(
+                          30,
+                          box.ry +
+                            (south ? dy : north ? -dy : 0) / (2 * axisScale),
+                        );
+                        return {
+                          ...item,
+                          cx:
+                            east || west
+                              ? box.cx + (east ? dx : -dx) / 2
+                              : box.cx,
+                          cy:
+                            south || north
+                              ? box.cy + (south ? dy : -dy) / 2
+                              : box.cy,
+                          rx: nextRx,
+                          ry: nextRy,
+                        };
+                      }),
+                    );
+                  }}
+                  onPointerUp={(event) => {
+                    event.stopPropagation();
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(
+                        event.pointerId,
+                      );
+                    cohabitationDrag.current = null;
+                    labelDrag.current = null;
+                  }}
+                  onPointerCancel={() => {
+                    cohabitationDrag.current = null;
+                    labelDrag.current = null;
+                  }}
+                >
+                  {cohabitations.map((group) => {
+                    const members = display.nodes.filter((node) =>
+                      group.nodeIds.includes(node.id),
+                    );
+                    if (members.length < 2) return null;
+                    const { cx, cy, rx, ry } = group,
+                      d = `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+                    return (
+                      <g
+                        key={group.id}
+                        className={`cohabitation-group ${selectedCohabitation === group.id ? "selected" : ""}`}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSelectedCohabitation(group.id);
+                          const point = flowPoint(event);
+                          if (point) {
+                            event.currentTarget.ownerSVGElement?.setPointerCapture(
+                              event.pointerId,
+                            );
+                            cohabitationDrag.current = {
+                              id: group.id,
+                              handle: "move",
+                              pointerId: event.pointerId,
+                              start: point,
+                              box: { cx, cy, rx, ry },
+                            };
+                          }
+                        }}
+                      >
+                        <path
+                          className="cohabitation-hit-area"
+                          d={d}
+                          fill="none"
+                          style={{
+                            stroke: "transparent",
+                            strokeWidth: 24,
+                            pointerEvents: "stroke",
+                            cursor: "move",
+                          }}
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            event.currentTarget.setPointerCapture(
+                              event.pointerId,
+                            );
+                            setSelectedCohabitation(group.id);
+                            const point = flowPoint(event);
+                            if (point)
+                              cohabitationDrag.current = {
+                                id: group.id,
+                                handle: "move",
+                                pointerId: event.pointerId,
+                                start: point,
+                                box: { cx, cy, rx, ry },
+                              };
+                          }}
+                        />
+                        <path
+                          d={d}
+                          fill="none"
+                          stroke="#52645e"
+                          strokeWidth={
+                            selectedCohabitation === group.id ? 4 : 3
+                          }
+                          strokeDasharray="12 8"
+                          strokeLinecap="butt"
+                          style={{ pointerEvents: "none" }}
+                        />
+                        {selectedCohabitation === group.id &&
+                          (
+                            [
+                              "e",
+                              "w",
+                              "n",
+                              "s",
+                              "ne",
+                              "nw",
+                              "se",
+                              "sw",
+                            ] as const
+                          ).map((handle) => {
+                            const diagonal = handle.length === 2,
+                              axisScale = diagonal ? Math.SQRT1_2 : 1,
+                              handleX = handle.includes("e")
+                                ? cx + rx * axisScale
+                                : handle.includes("w")
+                                  ? cx - rx * axisScale
+                                  : cx,
+                              handleY = handle.includes("s")
+                                ? cy + ry * axisScale
+                                : handle.includes("n")
+                                  ? cy - ry * axisScale
+                                  : cy;
+                            return (
+                              <circle
+                                key={handle}
+                                className="cohabitation-handle"
+                                cx={handleX}
+                                cy={handleY}
+                                r="9"
+                                onPointerDown={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  event.currentTarget.setPointerCapture(
+                                    event.pointerId,
+                                  );
+                                  setSelectedCohabitation(group.id);
+                                  const point = flowPoint(event);
+                                  if (point)
+                                    cohabitationDrag.current = {
+                                      id: group.id,
+                                      handle,
+                                      pointerId: event.pointerId,
+                                      start: point,
+                                      box: { cx, cy, rx, ry },
+                                    };
+                                }}
+                              />
+                            );
+                          })}
+                      </g>
+                    );
+                  })}
+                  {cohabitationLabels.map((label) => (
+                    <text
+                      key={label.id}
+                      className={`cohabitation-label ${selectedLabel === label.id ? "selected" : ""}`}
+                      x={label.x}
+                      y={label.y}
+                      fontSize={label.fontSize}
+                      fill="#263b34"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedLabel(label.id);
+                        setSelectedCohabitation(null);
+                        const point = flowPoint(event);
+                        if (point) {
+                          event.currentTarget.ownerSVGElement?.setPointerCapture(
+                            event.pointerId,
+                          );
+                          labelDrag.current = {
+                            id: label.id,
+                            pointerId: event.pointerId,
+                            start: point,
+                            origin: { x: label.x, y: label.y },
+                          };
+                        }
+                      }}
+                    >
+                      同居
+                    </text>
+                  ))}
+                </svg>
+              </ViewportPortal>
               <MiniMap
                 nodeColor={(n) =>
                   (n.data as Partial<FamilyNodeData>).fillColor || "#52645e"
@@ -516,6 +1084,7 @@ export function NodeForm({
   onDelete,
   onConnectionPreview,
   onDraftChange,
+  onChange,
 }: {
   mode: "add" | "edit";
   detail: ChartDetail;
@@ -526,6 +1095,7 @@ export function NodeForm({
   onDelete?(): void;
   onConnectionPreview?(direction: Direction | null): void;
   onDraftChange?(draft: NodeDraft | null): void;
+  onChange?(input: Partial<Omit<ChartNodeRecord, "id">>): void;
 }) {
   const presetKinds =
       preset?.kind === "partner"
@@ -582,22 +1152,37 @@ export function NodeForm({
     [relationshipFontSize, setRelationshipFontSize] = useState(
       value?.data.relationshipFontSize || 17,
     );
+  const hydrated = useRef(false);
+  const hydratedNodeId = useRef<string | null>(null);
   useEffect(() => {
-    if (value) {
-      const r = detail.nodes.find((n) => n.id === value.id);
-      setRelationship(value.data.relationshipId);
-      setGender(value.data.genderId);
-      setMemo(value.data.memo);
-      setFontSize(value.data.fontSize);
-      setRelationshipFontSize(value.data.relationshipFontSize);
-      setAnchor(r?.anchorNodeId || null);
-      setParent1(r?.parentNodeId1 || null);
-      setParent2(r?.parentNodeId2 || null);
-      setDirection(r?.placementDirection || "right");
-      setConnectionDirection(r?.connectionDirection || null);
-      setDivorced(r?.divorced || false);
+    if (!value) {
+      hydratedNodeId.current = null;
+      return;
     }
-  }, [value, detail.nodes, detail.relationships]);
+    if (hydratedNodeId.current === value.id) return;
+    hydratedNodeId.current = value.id;
+    hydrated.current = false;
+    const r = detail.nodes.find((n) => n.id === value.id);
+    setRelationship(value.data.relationshipId);
+    setGender(value.data.genderId);
+    setMemo(value.data.memo);
+    setFontSize(value.data.fontSize);
+    setRelationshipFontSize(value.data.relationshipFontSize);
+    setAnchor(r?.anchorNodeId || null);
+    setParent1(r?.parentNodeId1 || null);
+    setParent2(r?.parentNodeId2 || null);
+    setDirection(r?.placementDirection || "right");
+    setConnectionDirection(r?.connectionDirection || null);
+    setDivorced(r?.divorced || false);
+  }, [value, detail.nodes]);
+  useEffect(() => {
+    if (mode !== "edit" || !value?.id || !onChange) return;
+    if (!hydrated.current) {
+      hydrated.current = true;
+      return;
+    }
+    onChange({ fontSize, relationshipFontSize });
+  }, [mode, value?.id, onChange, fontSize, relationshipFontSize]);
   const draftNodeId = value?.id;
   useEffect(
     () => () => {
@@ -676,7 +1261,11 @@ export function NodeForm({
           基準ノード
           <select
             value={anchorNodeId || ""}
-            onChange={(e) => setAnchor(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setAnchor(next);
+              if (mode === "edit") onChange?.({ anchorNodeId: next });
+            }}
             required
           >
             <option value="" disabled>
@@ -695,7 +1284,11 @@ export function NodeForm({
         続柄
         <select
           value={relationshipId}
-          onChange={(e) => setRelationship(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setRelationship(next);
+            if (mode === "edit") onChange?.({ relationshipId: next });
+          }}
           required
         >
           {activeR.map((r) => (
@@ -714,7 +1307,11 @@ export function NodeForm({
         性別
         <select
           value={genderId}
-          onChange={(e) => setGender(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setGender(next);
+            if (mode === "edit") onChange?.({ genderId: next });
+          }}
           required
         >
           {activeG.map((g) => (
@@ -749,6 +1346,8 @@ export function NodeForm({
               const direction = (e.target.value || null) as Direction | null;
               setConnectionDirection(direction);
               onConnectionPreview?.(direction);
+              if (mode === "edit")
+                onChange?.({ connectionDirection: direction });
             }}
           >
             <option value="">自動（現在位置から判定）</option>
@@ -771,7 +1370,11 @@ export function NodeForm({
             配偶者
             <select
               value={parentNodeId2 || ""}
-              onChange={(e) => setParent2(e.target.value || null)}
+              onChange={(e) => {
+                const next = e.target.value || null;
+                setParent2(next);
+                if (mode === "edit") onChange?.({ parentNodeId2: next });
+              }}
             >
               <option value="">指定しない（片親）</option>
               {options
@@ -811,7 +1414,11 @@ export function NodeForm({
             父
             <select
               value={parentNodeId1 || ""}
-              onChange={(e) => setParent1(e.target.value || null)}
+              onChange={(e) => {
+                const next = e.target.value || null;
+                setParent1(next);
+                if (mode === "edit") onChange?.({ parentNodeId1: next });
+              }}
             >
               <option value="">指定なし</option>
               {options
@@ -828,7 +1435,11 @@ export function NodeForm({
             母
             <select
               value={parentNodeId2 || ""}
-              onChange={(e) => setParent2(e.target.value || null)}
+              onChange={(e) => {
+                const next = e.target.value || null;
+                setParent2(next);
+                if (mode === "edit") onChange?.({ parentNodeId2: next });
+              }}
             >
               <option value="">指定なし</option>
               {options
@@ -845,7 +1456,14 @@ export function NodeForm({
             <button
               type="button"
               className="button compact"
-              onClick={() => setParent2(suggestedParent2.id)}
+              onClick={() => {
+                setParent2(suggestedParent2.id);
+                if (mode === "edit")
+                  onChange?.({
+                    parentNodeId1,
+                    parentNodeId2: suggestedParent2.id,
+                  });
+              }}
             >
               配偶者「{suggestedParent2.data.relationshipName}」を母に設定
             </button>
@@ -864,7 +1482,11 @@ export function NodeForm({
             type="button"
             className={`button wide divorce-toggle ${divorced ? "danger" : ""}`}
             aria-pressed={divorced}
-            onClick={() => setDivorced((current) => !current)}
+            onClick={() => {
+              const next = !divorced;
+              setDivorced(next);
+              if (mode === "edit") onChange?.({ divorced: next });
+            }}
           >
             {divorced ? "離婚を解除" : "離婚に設定（二重斜線）"}
           </button>
@@ -882,6 +1504,10 @@ export function NodeForm({
               fontSize,
               relationshipFontSize,
             });
+        }}
+        onMemoCommit={() => {
+          if (mode === "edit" && draftNodeId)
+            onChange?.({ memo: memo.slice(0, 2000) });
         }}
         onFontSizeChange={(nextFontSize) => {
           setFontSize(nextFontSize);
@@ -904,22 +1530,16 @@ export function NodeForm({
             });
         }}
       />
-      <button
-        className="button primary wide"
-        disabled={!relationshipId || !genderId || !pairValid}
-      >
-        {mode === "add" ? (
-          <>
-            <Plus size={17} />
-            自動配置して追加
-          </>
-        ) : (
-          <>
-            <Check size={17} />
-            変更を保存
-          </>
-        )}
-      </button>
+      {mode === "add" && (
+        <button
+          type="submit"
+          className="button primary wide"
+          disabled={!relationshipId || !genderId || !pairValid}
+        >
+          <Plus size={17} />
+          自動配置して追加
+        </button>
+      )}
       {mode === "edit" && (
         <button type="button" className="button danger wide" onClick={onDelete}>
           <Trash2 size={17} />
