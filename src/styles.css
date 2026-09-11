@@ -395,7 +395,6 @@ p {
   padding: 10px 12px;
   background: #fff;
   color: var(--ink);
-  outline: none;
 }
 .auth-card input,
 .modal input,
@@ -403,14 +402,16 @@ p {
 .node-form select {
   height: 44px;
 }
-.auth-card input:focus,
-.modal input:focus,
-.modal select:focus,
-.node-form input:focus,
-.node-form select:focus,
-.node-form textarea:focus {
+.auth-card input:focus-visible,
+.modal input:focus-visible,
+.modal select:focus-visible,
+.node-form input:focus-visible,
+.node-form select:focus-visible,
+.node-form textarea:focus-visible {
   border-color: var(--forest-2);
   box-shadow: 0 0 0 3px rgba(36, 87, 71, 0.1);
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
 }
 .auth-links {
   display: flex;
@@ -714,8 +715,9 @@ p {
   flex: 1;
   padding: 8px;
 }
-.title-input:focus {
-  outline: 1px solid #bcc8c2;
+.title-input:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
   border-radius: 6px;
 }
 .save-state {
@@ -919,6 +921,49 @@ p {
 .cohabitation-label-editor h2 {
   margin: 0 0 14px;
   font-size: 18px;
+}
+.cohabitation-panel {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+}
+.cohabitation-panel h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+.cohabitation-person-list {
+  max-height: 150px;
+  overflow: auto;
+  margin: 8px 0 12px;
+}
+.cohabitation-person-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.cohabitation-person-list input {
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+.cohabitation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+.cohabitation-fields .wide {
+  grid-column: 1 / -1;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .cohabitation-handle {
   fill: #fff;

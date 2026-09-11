@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Node } from "@xyflow/react";
 import type { ChartDetail, ChartNodeRecord } from "../../types";
 import type { FamilyNodeData } from "../../familyGraph";
-import { NodeForm } from "./ChartEditor";
+import { NodeForm } from "./NodeForm";
 
 afterEach(cleanup);
 

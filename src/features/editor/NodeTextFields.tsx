@@ -5,7 +5,6 @@ type Props = {
   fontSize: number;
   relationshipFontSize: number;
   onMemoChange(value: string): void;
-  onMemoCommit(): void;
   onFontSizeChange(value: number): void;
   onRelationshipFontSizeChange(value: number): void;
 };
@@ -15,7 +14,6 @@ export function NodeTextFields({
   fontSize,
   relationshipFontSize,
   onMemoChange,
-  onMemoCommit,
   onFontSizeChange,
   onRelationshipFontSizeChange,
 }: Props) {
@@ -24,9 +22,6 @@ export function NodeTextFields({
   const handleMemoKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!["Enter", "Backspace", "Delete"].includes(event.key)) return;
     event.stopPropagation();
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    onMemoCommit();
   };
   const stopReactFlowKeyboard = (event: KeyboardEvent<HTMLElement>) => {
     if (["Enter", "Backspace", "Delete"].includes(event.key))

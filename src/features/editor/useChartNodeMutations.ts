@@ -1,10 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { api } from "../../api";
 import type { ChartDetail, ChartNodeRecord } from "../../types";
-import type { FamilyNodeData } from "../../familyGraph";
-import type { Node } from "@xyflow/react";
-import { toNodeLayout } from "./nodeLayout";
 
 type SaveState = (state: "saved" | "saving" | "error") => void;
 
@@ -14,27 +11,52 @@ export function useChartNodeMutations(
   setSaveState: SaveState,
   onDeleted: () => void,
 ) {
-  const savingStartedAt = useRef(0);
+  const pendingCount = useRef(0);
+  const batchStartedAt = useRef(0);
+  const hasBatchError = useRef(false);
+  const isMounted = useRef(true);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markSaved = () => {
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    };
+  }, []);
+  const beginMutation = () => {
     if (savedTimer.current) clearTimeout(savedTimer.current);
-    const remaining = Math.max(0, 500 - (Date.now() - savingStartedAt.current));
+    savedTimer.current = null;
+    if (pendingCount.current === 0) {
+      batchStartedAt.current = Date.now();
+      hasBatchError.current = false;
+    }
+    pendingCount.current += 1;
+    if (isMounted.current) setSaveState("saving");
+  };
+  const finishMutation = (hasError: boolean) => {
+    hasBatchError.current ||= hasError;
+    pendingCount.current = Math.max(0, pendingCount.current - 1);
+    if (pendingCount.current > 0 || !isMounted.current) return;
+    if (hasBatchError.current) {
+      setSaveState("error");
+      return;
+    }
+    const remaining = Math.max(0, 500 - (Date.now() - batchStartedAt.current));
     savedTimer.current = setTimeout(() => {
       savedTimer.current = null;
-      setSaveState("saved");
+      if (isMounted.current && pendingCount.current === 0)
+        setSaveState("saved");
     }, remaining);
   };
   const mutationOptions = {
-    onMutate: () => {
-      savingStartedAt.current = Date.now();
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      setSaveState("saving");
-    },
+    scope: { id: `chart-node-write:${chartId}` },
+    onMutate: beginMutation,
     onSuccess: (detail: ChartDetail) => {
       refresh(detail);
-      markSaved();
     },
-    onError: () => setSaveState("error"),
+    onSettled: (_detail: ChartDetail | undefined, error: Error | null) => {
+      finishMutation(error !== null);
+    },
   };
   const create = useMutation({
     mutationFn: (value: Omit<ChartNodeRecord, "id">) =>
@@ -43,17 +65,14 @@ export function useChartNodeMutations(
   });
   const update = useMutation({
     mutationFn: ({
+      chartId: targetChartId,
       nodeId,
       input,
     }: {
+      chartId: string;
       nodeId: string;
       input: Partial<Omit<ChartNodeRecord, "id">>;
-    }) => api.updateNode(chartId, nodeId, input),
-    ...mutationOptions,
-  });
-  const layout = useMutation({
-    mutationFn: (nodes: Node<FamilyNodeData>[]) =>
-      api.updateNodeLayout(chartId, toNodeLayout(nodes)),
+    }) => api.updateNode(targetChartId, nodeId, input),
     ...mutationOptions,
   });
   const remove = useMutation({
@@ -62,8 +81,7 @@ export function useChartNodeMutations(
     onSuccess: (detail) => {
       onDeleted();
       refresh(detail);
-      markSaved();
     },
   });
-  return { create, update, layout, remove };
+  return { create, update, remove };
 }
